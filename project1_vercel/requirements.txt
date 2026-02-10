@@ -1,4 +1,4 @@
 requests==2.32.3
 redis==5.2.1
 psycopg2-binary==2.9.10
-plivo==4.70.0
+plivo==4.59.5
