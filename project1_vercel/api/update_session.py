@@ -1,20 +1,12 @@
 from http.server import BaseHTTPRequestHandler
 import json
 import os
-from urllib.request import Request, urlopen
+import redis
 from urllib.parse import parse_qs, urlparse
 
 
-def redis_command(command):
-    url = os.environ["KV_REST_API_URL"]
-    token = os.environ["KV_REST_API_TOKEN"]
-
-    req = Request(url, data=json.dumps(command).encode(), headers={
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    })
-    with urlopen(req) as resp:
-        return json.loads(resp.read().decode())
+def get_redis():
+    return redis.from_url(os.environ["REDIS_URL"])
 
 
 class handler(BaseHTTPRequestHandler):
@@ -31,9 +23,8 @@ class handler(BaseHTTPRequestHandler):
             return
 
         key = f"session:{caller_id}"
-
-        result = redis_command(["GET", key])
-        session_data = result.get("result")
+        r = get_redis()
+        session_data = r.get(key)
 
         if not session_data:
             self.send_response(404)
@@ -45,12 +36,11 @@ class handler(BaseHTTPRequestHandler):
         session = json.loads(session_data)
         session["step"] = step
 
-        ttl_result = redis_command(["TTL", key])
-        ttl = ttl_result.get("result", 1800)
+        ttl = r.ttl(key)
         if ttl < 0:
             ttl = 1800
 
-        redis_command(["SET", key, json.dumps(session), "EX", ttl])
+        r.setex(key, ttl, json.dumps(session))
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
