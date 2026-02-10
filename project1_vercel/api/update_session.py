@@ -1,0 +1,69 @@
+from http.server import BaseHTTPRequestHandler
+import json
+import os
+from urllib.request import Request, urlopen
+from urllib.parse import parse_qs, urlparse
+
+
+def redis_command(command):
+    """Send a command to Upstash Redis via REST API."""
+    url = os.environ["KV_REST_API_URL"]
+    token = os.environ["KV_REST_API_TOKEN"]
+
+    req = Request(url, data=json.dumps(command).encode(), headers={
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    })
+    with urlopen(req) as resp:
+        return json.loads(resp.read().decode())
+
+
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        # Get caller_id and step from query params
+        query = parse_qs(urlparse(self.path).query)
+        caller_id = query.get("caller_id", [None])[0]
+        step = query.get("step", [None])[0]
+
+        if not caller_id or not step:
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "caller_id and step query params required"}).encode())
+            return
+
+        key = f"session:{caller_id}"
+
+        # GET existing session
+        result = redis_command(["GET", key])
+        session_data = result.get("result")
+
+        if not session_data:
+            self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Session not found or expired"}).encode())
+            return
+
+        # Update the step
+        session = json.loads(session_data)
+        session["step"] = step
+
+        # GET remaining TTL to preserve it
+        ttl_result = redis_command(["TTL", key])
+        ttl = ttl_result.get("result", 1800)
+        if ttl < 0:
+            ttl = 1800
+
+        # SET with remaining TTL
+        redis_command(["SET", key, json.dumps(session), "EX", ttl])
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({
+            "message": "Session updated",
+            "caller_id": caller_id,
+            "session": session,
+            "ttl_remaining": ttl
+        }).encode())
