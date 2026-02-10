@@ -3,10 +3,10 @@ import json
 import os
 from urllib.request import Request, urlopen
 from urllib.parse import parse_qs, urlparse
+from datetime import datetime, timezone
 
 
 def redis_command(command):
-    """Send a command to Upstash Redis via REST API."""
     url = os.environ["KV_REST_API_URL"]
     token = os.environ["KV_REST_API_TOKEN"]
 
@@ -19,8 +19,7 @@ def redis_command(command):
 
 
 class handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        # Get caller_id from query params
+    def do_POST(self):
         query = parse_qs(urlparse(self.path).query)
         caller_id = query.get("caller_id", [None])[0]
 
@@ -31,28 +30,20 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": "caller_id query param required"}).encode())
             return
 
+        session_data = {
+            "step": "greeting",
+            "started_at": datetime.now(timezone.utc).isoformat()
+        }
+
         key = f"session:{caller_id}"
-
-        # GET session data
-        result = redis_command(["GET", key])
-        session_data = result.get("result")
-
-        if not session_data:
-            self.send_response(404)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": "Session not found or expired"}).encode())
-            return
-
-        # GET remaining TTL
-        ttl_result = redis_command(["TTL", key])
-        ttl = ttl_result.get("result", -1)
+        redis_command(["SET", key, json.dumps(session_data), "EX", 1800])
 
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps({
+            "message": "Session started",
             "caller_id": caller_id,
-            "session": json.loads(session_data),
-            "ttl_remaining": ttl
+            "session": session_data,
+            "ttl": 1800
         }).encode())
